@@ -1,34 +1,62 @@
 <?php
 /**
- * Projects API
- * Handles CRUD operations for projects
+ * Projects API - CRUD Operations
+ * 
+ * This API handles all project-related operations:
+ * - GET /projects - Retrieve all published projects
+ * - GET /projects?action=single&id=X - Get a specific project by ID
+ * - POST /projects - Create a new project (requires authentication)
+ * - PUT /projects - Update an existing project (requires authentication)
+ * - DELETE /projects?id=X - Delete a project (requires authentication)
+ * 
+ * Data Storage:
+ * - Primary: MySQL database using mysqli (recommended)
+ * - Fallback: JSON file storage if database is unavailable
+ * 
+ * Security:
+ * - Public endpoints: GET requests (view projects)
+ * - Protected endpoints: POST, PUT, DELETE (require authentication token)
+ * - Input sanitization to prevent XSS attacks
+ * - Prepared statements to prevent SQL injection
  */
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/admin-config.php';
 require_once __DIR__ . '/utils.php';
 
+// Enable CORS for frontend API access
 handle_cors();
 
+// Get HTTP method (GET, POST, PUT, DELETE)
 $method = $_SERVER['REQUEST_METHOD'];
+// Get the action parameter from URL (e.g., ?action=single)
 $action = $_GET['action'] ?? '';
 
-// Try to connect to the database; if successful we'll use DB-backed storage
+// Database connection using mysqli (improved version)
 $USE_DB = false;
-$pdo = null;
+$mysqli = null;
+
+// Try to connect to MySQL database
 try {
     if (defined('DB_HOST') && defined('DB_NAME') && defined('DB_USER')) {
-        $pdo = new PDO(
-            "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4",
-            DB_USER,
-            DB_PASS,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
-        );
+        // Create new mysqli connection
+        $mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+        
+        // Check for connection errors
+        if ($mysqli->connect_error) {
+            throw new Exception("Connection failed: " . $mysqli->connect_error);
+        }
+        
+        // Set character encoding to UTF-8 for proper text handling
+        $mysqli->set_charset("utf8mb4");
+        
+        // Connection successful
         $USE_DB = true;
     }
-} catch (PDOException $e) {
-    // Fall back to file storage if DB not available
+} catch (Exception $e) {
+    // If database connection fails, fall back to file-based storage
     $USE_DB = false;
+    $mysqli = null;
 }
 
 // Public endpoints (no authentication required)
@@ -59,44 +87,81 @@ switch ($method) {
 }
 
 /**
- * Get all projects
+ * Get all published projects from the database or file
+ * Returns a list of all published projects
  */
 function get_projects() {
-    global $USE_DB, $pdo;
-    if ($USE_DB && $pdo) {
-        $stmt = $pdo->query('SELECT id, title, slug, description, category, image, live_url, github_url, tech_tags, featured, is_published, created_at, updated_at FROM projects WHERE is_published = 1 ORDER BY created_at DESC');
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        // Convert tech_tags to array for compatibility
-        foreach ($rows as &$r) {
-            $r['technologies'] = $r['tech_tags'] ? explode(',', $r['tech_tags']) : [];
+    global $USE_DB, $mysqli;
+    
+    // If database is available, fetch from there
+    if ($USE_DB && $mysqli) {
+        // Query to get all published projects, ordered by newest first
+        $query = 'SELECT id, title, slug, description, category, image, live_url, github_url, 
+                        tech_tags, featured, is_published, created_at, updated_at 
+                 FROM projects 
+                 WHERE is_published = 1 
+                 ORDER BY created_at DESC';
+        
+        $result = $mysqli->query($query);
+        
+        if ($result) {
+            $rows = [];
+            // Fetch all rows as associative arrays
+            while ($row = $result->fetch_assoc()) {
+                // Convert comma-separated tech_tags to array for easier use
+                $row['technologies'] = $row['tech_tags'] ? explode(',', $row['tech_tags']) : [];
+                $rows[] = $row;
+            }
+            
+            send_json_response(['success' => true, 'data' => $rows]);
         }
-        send_json_response(['success' => true, 'data' => $rows]);
     }
 
+    // If no database, use file-based storage
     $projects = load_projects();
     send_json_response(['success' => true, 'data' => $projects]);
 }
 
 /**
- * Get single project
+ * Get a single project by its ID
+ * @param int $id - The project ID to retrieve
  */
 function get_project($id) {
+    // Validate that ID is provided
     if (!$id) {
         send_json_response(['error' => 'Project ID required'], 400);
     }
     
-    global $USE_DB, $pdo;
-    if ($USE_DB && $pdo) {
-        $stmt = $pdo->prepare('SELECT id, title, slug, description, category, image, live_url, github_url, tech_tags, featured, is_published, created_at, updated_at FROM projects WHERE id = :id');
-        $stmt->execute([':id' => $id]);
-        $project = $stmt->fetch(PDO::FETCH_ASSOC);
+    global $USE_DB, $mysqli;
+    
+    // If database is available, fetch from there
+    if ($USE_DB && $mysqli) {
+        // Prepare statement to prevent SQL injection
+        $stmt = $mysqli->prepare('SELECT id, title, slug, description, category, image, live_url, 
+                                         github_url, tech_tags, featured, is_published, created_at, updated_at 
+                                  FROM projects 
+                                  WHERE id = ?');
+        
+        // Bind the ID parameter
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+        
+        // Get result
+        $result = $stmt->get_result();
+        $project = $result->fetch_assoc();
+        
+        // Check if project exists
         if (!$project) {
             send_json_response(['error' => 'Project not found'], 404);
         }
+        
+        // Convert tech_tags to array
         $project['technologies'] = $project['tech_tags'] ? explode(',', $project['tech_tags']) : [];
+        
         send_json_response(['success' => true, 'data' => $project]);
     }
 
+    // Fallback to file-based storage
     $projects = load_projects();
     $project = array_filter($projects, function($p) use ($id) {
         return $p['id'] == $id;
@@ -113,12 +178,14 @@ function get_project($id) {
 }
 
 /**
- * Create new project
+ * Create a new project
+ * Accepts JSON input with project details
  */
 function create_project() {
+    // Get JSON input from request body
     $input = json_decode(file_get_contents('php://input'), true);
     
-    // Validate required fields
+    // Validate that all required fields are present
     $required = ['title', 'description', 'category'];
     foreach ($required as $field) {
         if (empty($input[$field])) {
@@ -126,7 +193,9 @@ function create_project() {
         }
     }
     
-    global $USE_DB, $pdo;
+    global $USE_DB, $mysqli;
+    
+    // Sanitize inputs to prevent XSS attacks
     $title = sanitize_input($input['title']);
     $description = sanitize_input($input['description']);
     $image = $input['image'] ?? '';
@@ -136,31 +205,48 @@ function create_project() {
     $github = $input['githubUrl'] ?? '';
     $live = $input['liveUrl'] ?? '';
 
-    if ($USE_DB && $pdo) {
-        // generate slug
+    // If database is available, insert there
+    if ($USE_DB && $mysqli) {
+        // Generate URL-friendly slug from title
         $slug = preg_replace('/[^a-z0-9]+/i', '-', strtolower(trim($title)));
         $slug = trim($slug, '-');
+        // If slug is empty, generate a random one
         if (empty($slug)) {
             $slug = 'proj-' . bin2hex(random_bytes(4));
         }
 
+        // Convert technologies array to comma-separated string for database
         $techs = is_array($technologies) ? implode(',', $technologies) : $technologies;
 
-        $stmt = $pdo->prepare('INSERT INTO projects (title, slug, description, category, image, live_url, github_url, tech_tags, featured, is_published, created_at) VALUES (:title, :slug, :description, :category, :image, :live_url, :github_url, :tech_tags, :featured, 1, NOW())');
-        $stmt->execute([
-            ':title' => $title,
-            ':slug' => $slug,
-            ':description' => $description,
-            ':category' => $category,
-            ':image' => $image,
-            ':live_url' => $live,
-            ':github_url' => $github,
-            ':tech_tags' => $techs,
-            ':featured' => $featured
-        ]);
+        // Prepare INSERT statement to prevent SQL injection
+        $stmt = $mysqli->prepare('INSERT INTO projects (title, slug, description, category, image, 
+                                                        live_url, github_url, tech_tags, featured, 
+                                                        is_published, created_at) 
+                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())');
+        
+        // Bind parameters: s = string, i = integer
+        $stmt->bind_param('ssssssssi', $title, $slug, $description, $category, $image, 
+                         $live, $github, $techs, $featured);
+        
+        // Execute the insert
+        $stmt->execute();
 
-        $id = $pdo->lastInsertId();
-        $new_project = ['id' => $id, 'title' => $title, 'description' => $description, 'image' => $image, 'technologies' => is_array($technologies) ? $technologies : ($technologies ? explode(',', $technologies) : []), 'category' => $category, 'featured' => $featured, 'githubUrl' => $github, 'liveUrl' => $live, 'created_at' => date('Y-m-d H:i:s')];
+        // Get the auto-generated ID
+        $id = $mysqli->insert_id;
+        
+        // Prepare response data
+        $new_project = [
+            'id' => $id, 
+            'title' => $title, 
+            'description' => $description, 
+            'image' => $image, 
+            'technologies' => is_array($technologies) ? $technologies : ($technologies ? explode(',', $technologies) : []), 
+            'category' => $category, 
+            'featured' => $featured, 
+            'githubUrl' => $github, 
+            'liveUrl' => $live, 
+            'created_at' => date('Y-m-d H:i:s')
+        ];
 
         log_message("Project created (DB): " . $title);
         send_json_response(['success' => true, 'message' => 'Project created successfully', 'data' => $new_project], 201);
@@ -203,31 +289,37 @@ function create_project() {
 }
 
 /**
- * Update existing project
+ * Update an existing project
+ * Accepts JSON input with updated project details
  */
 function update_project() {
+    // Get JSON input from request body
     $input = json_decode(file_get_contents('php://input'), true);
     
+    // Validate that project ID is provided
     if (empty($input['id'])) {
         send_json_response(['error' => 'Project ID required'], 400);
     }
     
-    global $USE_DB, $pdo;
-    if (empty($input['id'])) {
-        send_json_response(['error' => 'Project ID required'], 400);
-    }
-
     $id = $input['id'];
+    global $USE_DB, $mysqli;
 
-    if ($USE_DB && $pdo) {
-        // Fetch existing
-        $stmt = $pdo->prepare('SELECT * FROM projects WHERE id = :id');
-        $stmt->execute([':id' => $id]);
-        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+    // If database is available, update there
+    if ($USE_DB && $mysqli) {
+        // First, fetch the existing project to merge with new data
+        $stmt = $mysqli->prepare('SELECT * FROM projects WHERE id = ?');
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+        
+        $result = $stmt->get_result();
+        $existing = $result->fetch_assoc();
+        
+        // Check if project exists
         if (!$existing) {
             send_json_response(['error' => 'Project not found'], 404);
         }
 
+        // Use new values if provided, otherwise keep existing values
         $title = sanitize_input($input['title'] ?? $existing['title']);
         $description = sanitize_input($input['description'] ?? $existing['description']);
         $image = $input['image'] ?? $existing['image'];
@@ -237,23 +329,26 @@ function update_project() {
         $github = $input['githubUrl'] ?? $existing['github_url'] ?? $existing['githubUrl'] ?? '';
         $live = $input['liveUrl'] ?? $existing['live_url'] ?? $existing['liveUrl'] ?? '';
 
+        // Convert technologies array to comma-separated string
         $techs = is_array($technologies) ? implode(',', $technologies) : $technologies;
 
-        $upd = $pdo->prepare('UPDATE projects SET title = :title, description = :description, category = :category, image = :image, live_url = :live_url, github_url = :github_url, tech_tags = :tech_tags, featured = :featured, updated_at = NOW() WHERE id = :id');
-        $upd->execute([
-            ':title' => $title,
-            ':description' => $description,
-            ':category' => $category,
-            ':image' => $image,
-            ':live_url' => $live,
-            ':github_url' => $github,
-            ':tech_tags' => $techs,
-            ':featured' => $featured,
-            ':id' => $id
-        ]);
+        // Prepare UPDATE statement
+        $upd = $mysqli->prepare('UPDATE projects 
+                                SET title = ?, description = ?, category = ?, image = ?, 
+                                    live_url = ?, github_url = ?, tech_tags = ?, featured = ?, 
+                                    updated_at = NOW() 
+                                WHERE id = ?');
+        
+        // Bind parameters
+        $upd->bind_param('sssssssii', $title, $description, $category, $image, 
+                        $live, $github, $techs, $featured, $id);
+        
+        // Execute update
+        $upd->execute();
 
         log_message("Project updated (DB): ID " . $id);
-        send_json_response(['success' => true, 'message' => 'Project updated successfully', 'data' => ['id' => $id, 'title' => $title]]);
+        send_json_response(['success' => true, 'message' => 'Project updated successfully', 
+                           'data' => ['id' => $id, 'title' => $title]]);
     }
 
     // Fallback to JSON file update
@@ -288,22 +383,32 @@ function update_project() {
 }
 
 /**
- * Delete project
+ * Delete a project by ID
+ * Permanently removes project from database or file
  */
 function delete_project() {
+    // Get project ID from URL parameter
     $id = $_GET['id'] ?? null;
     
+    // Validate that ID is provided
     if (!$id) {
         send_json_response(['error' => 'Project ID required'], 400);
     }
     
-    global $USE_DB, $pdo;
-    if ($USE_DB && $pdo) {
-        $stmt = $pdo->prepare('DELETE FROM projects WHERE id = :id');
-        $stmt->execute([':id' => $id]);
-        if ($stmt->rowCount() === 0) {
+    global $USE_DB, $mysqli;
+    
+    // If database is available, delete from there
+    if ($USE_DB && $mysqli) {
+        // Prepare DELETE statement to prevent SQL injection
+        $stmt = $mysqli->prepare('DELETE FROM projects WHERE id = ?');
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+        
+        // Check if any row was actually deleted
+        if ($stmt->affected_rows === 0) {
             send_json_response(['error' => 'Project not found'], 404);
         }
+        
         log_message("Project deleted (DB): ID $id");
         send_json_response(['success' => true, 'message' => 'Project deleted successfully']);
     }

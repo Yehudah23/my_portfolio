@@ -1,13 +1,19 @@
 <?php
-/**
- * Configuration file for the portfolio contact system
- * Update these settings according to your needs
- */
+
 
 // Email Configuration
-define('CONTACT_EMAIL', 'your-email@example.com'); // Replace with your email
+define('CONTACT_EMAIL', 'judahk065@gmail.com'); // Replace with your email
 define('FROM_EMAIL', 'noreply@yourdomain.com'); // Replace with your domain email
 define('SUBJECT_PREFIX', '[Portfolio Contact] ');
+
+// SMTP Configuration for PHPMailer
+define('SMTP_HOST', 'smtp.gmail.com'); // SMTP server (e.g., smtp.gmail.com for Gmail)
+define('SMTP_PORT', 587); // SMTP port (587 for TLS, 465 for SSL)
+define('SMTP_ENCRYPTION', 'tls'); // Encryption type: 'tls' or 'ssl'
+define('SMTP_USERNAME', 'judahk065@gmail.com'); // Your SMTP username (usually your email)
+define('SMTP_PASSWORD', 'omkbsbcprxwfdpgv'); // Your SMTP password or app-specific password
+define('SMTP_FROM_NAME', 'Portfolio Contact Form'); // Sender name
+define('USE_PHPMAILER', true); // Set to true to use PHPMailer, false to use PHP mail()
 
 // Security Settings
 define('MAX_REQUESTS_PER_HOUR', 5); // Maximum contact form submissions per IP per hour
@@ -20,11 +26,14 @@ define('MAX_NAME_LENGTH', 100);
 define('MIN_MESSAGE_LENGTH', 10);
 define('MAX_MESSAGE_LENGTH', 5000);
 
-// CORS Settings
+// CORS Settings - Allow these domains to access the API
 define('ALLOWED_ORIGINS', [
-    'http://localhost:4200',
-    'http://localhost:8000',
-    'https://yourdomain.com' // Add your production domain
+    'http://localhost:4200',        // Angular development server
+    'http://127.0.0.1:4200',        // Angular dev (IP address)
+    'http://localhost:8000',        // Alternative local server
+    'http://localhost',             // General localhost
+    'http://127.0.0.1',            // General localhost (IP)
+    'https://yourdomain.com'       // Production domain (update this!)
 ]);
 
 // Database Configuration (optional - for storing contact submissions)
@@ -33,16 +42,17 @@ define('DB_NAME', 'my_portfolio');
 define('DB_USER', 'root');
 define('DB_PASS', '');
 
-// File Paths
-define('LOG_FILE', __DIR__ . '/logs/contact.log');
-define('RATE_LIMIT_FILE', __DIR__ . '/data/rate_limits.json');
+// File Paths - Store data in root directories for easier access
+define('LOG_FILE', dirname(__DIR__) . '/logs/contact.log');
+define('RATE_LIMIT_FILE', dirname(__DIR__) . '/data/rate_limits.json');
 
-// Create necessary directories
-if (!file_exists(__DIR__ . '/logs')) {
-    mkdir(__DIR__ . '/logs', 0755, true);
+// Create necessary directories if they don't exist
+$root_dir = dirname(__DIR__);
+if (!file_exists($root_dir . '/logs')) {
+    mkdir($root_dir . '/logs', 0755, true);
 }
-if (!file_exists(__DIR__ . '/data')) {
-    mkdir(__DIR__ . '/data', 0755, true);
+if (!file_exists($root_dir . '/data')) {
+    mkdir($root_dir . '/data', 0755, true);
 }
 
 return [

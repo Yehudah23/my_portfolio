@@ -1,14 +1,18 @@
 <?php
 /**
  * Contact Form Handler
- * Handles contact form submissions with validation, rate limiting, and email sending
+ * Processes contact form submissions with:
+ * - Input validation (name, email, subject, message)
+ * - Anti-spam protection (honeypot and rate limiting)
+ * - Email sending via PHPMailer or native PHP mail()
+ * - Activity logging for security and debugging
  */
 
-// Load configuration and utilities
+// Load configuration settings and utility functions
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/utils.php';
 
-// Handle CORS
+// Enable CORS to allow frontend from different domain to access this API
 handle_cors();
 
 // Only accept POST requests

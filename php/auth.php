@@ -4,9 +4,10 @@
  * Handles admin login and session management
  */
 
-require_once __DIR__ . '/../config.php';
+// Load configuration files from the same directory
+require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/admin-config.php';
-require_once __DIR__ . '/../utils.php';
+require_once __DIR__ . '/utils.php';
 
 // Start session
 session_name(SESSION_NAME);
